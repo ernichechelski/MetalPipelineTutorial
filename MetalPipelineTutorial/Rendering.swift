@@ -18,9 +18,6 @@ import MetalKit
 
 class Primitive {
 
-    // Every primitive has some mesh object, which describes it's shape. This mesh can be generated later
-    var mesh: MDLMesh!
-
     // Every primitive, to be recognized by Metal, must have mesh in MTKMesh type.
     var mtkMesh: MTKMesh!
 
@@ -44,13 +41,15 @@ class Primitive {
 
     /// Override this method to create mesh with provided allocator.
     /// However there is several ways to generate that mesh!
-    func create(allocator: MTKMeshBufferAllocator) {}
+    func create(allocator: MTKMeshBufferAllocator) -> MDLMesh {
+        fatalError("Implement this method to create some mesh")
+    }
 }
 
 final class BoxPrimitive: Primitive {
 
-    override func create(allocator: MTKMeshBufferAllocator) {
-        mesh = MDLMesh(boxWithExtent: [size, size, size],
+    override func create(allocator: MTKMeshBufferAllocator) -> MDLMesh {
+       MDLMesh(boxWithExtent: [size, size, size],
                            segments: [1, 1, 1],
                            inwardNormals: false, geometryType: .lines,
                            allocator: allocator)
@@ -59,19 +58,19 @@ final class BoxPrimitive: Primitive {
 
 class SpherePrimitive: Primitive {
 
-    override func create(allocator: MTKMeshBufferAllocator) {
-        mesh = MDLMesh(sphereWithExtent: [size/2,size/2,size/2],
+    override func create(allocator: MTKMeshBufferAllocator) -> MDLMesh {
+        MDLMesh(sphereWithExtent: [size/2,size/2,size/2],
                        segments: [20,20],
                        inwardNormals: false,
-                       geometryType: .lines,
+                       geometryType: .triangles,
                        allocator: allocator)
     }
 }
 
 final class ConePrimitive: Primitive {
 
-    override func create(allocator: MTKMeshBufferAllocator) {
-        mesh = MDLMesh(coneWithExtent: [size,size,size],
+    override func create(allocator: MTKMeshBufferAllocator) -> MDLMesh {
+        MDLMesh(coneWithExtent: [size,size,size],
                        segments: [2,20],
                        inwardNormals: false, cap: true,
                        geometryType: .lines,
@@ -82,8 +81,8 @@ final class ConePrimitive: Primitive {
 
 final class IcosanhedronPrimitive: Primitive {
 
-    override func create(allocator: MTKMeshBufferAllocator) {
-        mesh = MDLMesh(icosahedronWithExtent: [size,size,size],
+    override func create(allocator: MTKMeshBufferAllocator) -> MDLMesh {
+        MDLMesh(icosahedronWithExtent: [size,size,size],
                        inwardNormals: false,
                        geometryType: .lines,
                        allocator: allocator)
@@ -106,6 +105,7 @@ final class MetalRenderer2D: NSObject, MTKViewDelegate {
 
 
     init?(metalView: MTKView) {
+        /// Get reference for Metal compatible component of current machine (for example GPU)
         guard let device = MTLCreateSystemDefaultDevice() else { fatalError("GPU not available") }
 
         guard let commandQueue = device.makeCommandQueue() else {  fatalError("No available resources to create command queue") }
@@ -128,8 +128,7 @@ final class MetalRenderer2D: NSObject, MTKViewDelegate {
     func render(primitives: [Primitive]) {
         self.primitves = primitives
         primitives.forEach {
-            $0.create(allocator: allocator)
-            $0.mtkMesh = try! MTKMesh(mesh: $0.mesh, device: device)
+            $0.mtkMesh = try! MTKMesh(mesh: $0.create(allocator: allocator), device: device)
 
             /// Descriptor describes how bytes put in encoder should be interpreted via Metal code
             $0.pipelineDescriptor = MTLRenderPipelineDescriptor(
@@ -193,7 +192,7 @@ extension MTLRenderPipelineDescriptor {
         self.init()
         self.vertexFunction = vertexFunction
         self.fragmentFunction = fragmentFunction
-        self.vertexDescriptor = MTKMetalVertexDescriptorFromModelIO(primitiveForVertexDescriptor.mesh.vertexDescriptor)!
+        self.vertexDescriptor = MTKMetalVertexDescriptorFromModelIO(primitiveForVertexDescriptor.mtkMesh.vertexDescriptor)!
         colorAttachments[0].pixelFormat = colorPixelFormat
     }
 }
