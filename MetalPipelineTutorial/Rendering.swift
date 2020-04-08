@@ -12,6 +12,7 @@ import MetalKit
 struct PositionOffsets {
     let x: Float
     let y: Float
+    let z: Float
 }
 
 import MetalKit
@@ -62,7 +63,7 @@ class SpherePrimitive: Primitive {
         MDLMesh(sphereWithExtent: [size/2,size/2,size/2],
                        segments: [20,20],
                        inwardNormals: false,
-                       geometryType: .triangles,
+                       geometryType: .lines,
                        allocator: allocator)
     }
 }
@@ -89,20 +90,18 @@ final class IcosanhedronPrimitive: Primitive {
     }
 }
 
-final class MetalRenderer2D: NSObject, MTKViewDelegate {
+class MetalRenderer2D: NSObject, MTKViewDelegate {
+
+    var library: MTLLibrary /// All functions implemented in metal language we can access here.
+    var vertexFunction: MTLFunction /// Here I'll keep vertex function, which translates mesh position to the position on the screen.
+    var fragmentFunction: MTLFunction /// Here I'll keep fragment function, which provides appearance (like color) for each piece of mesh.
 
     private let metalView: MTKView /// UI component which shows rendered content.
     private let device: MTLDevice /// Abstract layer which describes device which performs Metal code.
     private let commandQueue: MTLCommandQueue /// Queue of commands. More info below :)
     private let allocator: MTKMeshBufferAllocator /// This class is used to allocate all meshes in the scene.
-
-    private let vertexFunction: MTLFunction /// Here I'll keep vertex function, which translates mesh position to the position on the screen.
-    private let fragmentFunction: MTLFunction /// Here I'll keep fragment function, which provides appearance (like color) for each piece of mesh.
-
     private var timer: Float = 0 /// To animate all objects I defined a timer.
-
     private var primitves = [Primitive]() /// Reference to keep all defined primitives to render.
-
 
     init?(metalView: MTKView) {
         /// Get reference for Metal compatible component of current machine (for example GPU)
@@ -110,9 +109,9 @@ final class MetalRenderer2D: NSObject, MTKViewDelegate {
 
         guard let commandQueue = device.makeCommandQueue() else {  fatalError("No available resources to create command queue") }
 
-        /// All functions implemented in metal language we can access here.
-        guard let library = device.makeDefaultLibrary() else {  fatalError("Cannot create library with Metl functions") }
+        guard let library = device.makeDefaultLibrary() else {  fatalError("Cannot create library with Metal functions") }
 
+        self.library = library
         self.device = device
         self.metalView = metalView
         self.metalView.device = device
@@ -161,13 +160,9 @@ final class MetalRenderer2D: NSObject, MTKViewDelegate {
 
             do {
                 let pipelineState = try device.makeRenderPipelineState(descriptor: $0.pipelineDescriptor) /// Making pipeline state means that we know current device supports pipeline descriptor.
-
                 renderEncoder.setRenderPipelineState(pipelineState) /// Put ready state into encoder.
                 renderEncoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0) /// Put vertex buffer for this mesh into encoder.
-
-                renderEncoder.setPositionOffset(offset: $0.behaviour?(timer) ?? PositionOffsets(x: 0, y: 0)) /// Calculate offset for each mesh based on it's behaviour
-                renderEncoder.setColor($0.color) /// Set color for each mesh.
-                renderEncoder.draw(mtkMesh: $0.mtkMesh) ///Draw every submesh of each mesh.
+                render(primitive: $0, with: renderEncoder, with: timer)
 
             } catch let error {
                 fatalError(error.localizedDescription)
@@ -182,6 +177,12 @@ final class MetalRenderer2D: NSObject, MTKViewDelegate {
             commandBuffer.present(drawable)
             commandBuffer.commit()
         }
+    }
+
+    func render(primitive: Primitive, with renderEncoder: MTLRenderCommandEncoder, with timer: Float) {
+        renderEncoder.setPositionOffset(offset: primitive.behaviour?(timer) ?? PositionOffsets(x: 0, y: 0, z: 0)) /// Calculate offset for each mesh based on it's behaviour
+        renderEncoder.setColor(primitive.color) /// Set color for each mesh.
+        renderEncoder.draw(mtkMesh: primitive.mtkMesh) ///Draw every submesh of each mesh.
     }
 }
 
@@ -280,5 +281,78 @@ extension NSColor {
             CGFloat(0),
             CGFloat(0)
         ], count: 4)
+    }
+}
+
+extension MTLLibrary {
+
+    var vertex3DFunction: MTLFunction {
+        makeFunction(name: "vertex_uniforms")!
+    }
+}
+
+extension MTLRenderCommandEncoder {
+
+    /// Compatible with `MTLLibrary.vertex3DFunction`
+    func setUniforms(_ uniforms: Uniforms) {
+        var value = uniforms
+        setVertexBytes(&value, length: MemoryLayout<Uniforms>.stride, index: 1)
+    }
+}
+
+
+fileprivate extension PositionOffsets {
+
+    var translation: float4x4 {
+        float4x4(translation: [x, y, z])
+    }
+}
+
+final class MetalRenderer3D: MetalRenderer2D {
+
+    var horizontalRotationAngleInDegrees = Float(180)
+    var verticalRotationAngleInDegrees = Float(180)
+
+    private var worldRotation: float4x4 {
+        float4x4(rotation: [
+            verticalRotationAngleInDegrees.degreesToRadians,
+            horizontalRotationAngleInDegrees.degreesToRadians,
+            0
+        ])
+    }
+
+    private var worldPerspective: float4x4 {
+        float4x4(translation: [0, 0, -3]).inverse
+    }
+
+    private var uniforms = Uniforms()
+
+    override init?(metalView: MTKView) {
+        super.init(metalView: metalView)
+        vertexFunction = library.vertex3DFunction
+        uniforms.viewMatrix = worldPerspective * worldRotation
+    }
+
+    override func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        let aspect = Float(view.bounds.width) / Float(view.bounds.height)
+
+        uniforms.projectionMatrix = float4x4(
+            projectionFov: Float(40).degreesToRadians,
+            near: 0.001,
+            far: 10,
+            aspect: aspect
+        )
+    }
+
+    override func render(primitive: Primitive, with renderEncoder: MTLRenderCommandEncoder, with timer: Float) {
+        var meshUniform = uniforms
+
+        let position = primitive.behaviour?(timer) ?? PositionOffsets(x: 0, y: 0, z: 0)
+        meshUniform.modelMatrix = position.translation
+        meshUniform.viewMatrix = worldPerspective * worldRotation
+
+        renderEncoder.setUniforms(meshUniform)
+        renderEncoder.setColor(primitive.color)
+        renderEncoder.draw(mtkMesh: primitive.mtkMesh)
     }
 }
